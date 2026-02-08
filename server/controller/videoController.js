@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const COOKIES_PATH = path.join(__dirname, 'cookies.txt');
 
 const TEMP_DIR = path.join(__dirname, '../temp');
 if (!fs.existsSync(TEMP_DIR)) {
@@ -35,8 +36,8 @@ const isVideoFormat = (format) => {
 const hasAudioTrack = (format) => {
   if (format.acodec && format.acodec !== 'none') return true;
   if ((format.acodec === undefined || format.acodec === null) &&
-      ['mp4', 'webm', 'mov'].includes(format.ext) &&
-      (format.vcodec !== 'none' || format.vcodec === undefined || format.vcodec === null)) {
+    ['mp4', 'webm', 'mov'].includes(format.ext) &&
+    (format.vcodec !== 'none' || format.vcodec === undefined || format.vcodec === null)) {
     return true;
   }
   return false;
@@ -57,9 +58,9 @@ export const getVideoInfo = async (req, res) => {
     const { url } = req.body;
 
     if (!url) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'URL is required' 
+      return res.status(400).json({
+        success: false,
+        error: 'URL is required'
       });
     }
 
@@ -77,18 +78,27 @@ export const getVideoInfo = async (req, res) => {
       noWarnings: true,
       noCheckCertificate: true,
       preferFreeFormats: true,
+      jsRuntimes: 'node',
+      extractorArgs: 'youtube:player_client=android',
+      userAgent: 'Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
+      cookies: COOKIES_PATH,
+
       addHeader: [
-        'referer:youtube.com',
-        'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      ]
+        'referer:https://www.youtube.com/',
+        'origin:https://www.youtube.com',
+        'user-agent:Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36'
+      ],
+
+      quiet: true,
+      noPlaylist: true
     });
 
     let allFormats = [];
 
     if (platform === 'YouTube') {
       const videoFormatsWithAudio = (info.formats || [])
-        .filter(f => 
-          f.vcodec && f.vcodec !== 'none' && 
+        .filter(f =>
+          f.vcodec && f.vcodec !== 'none' &&
           f.acodec && f.acodec !== 'none' &&
           (f.ext === 'mp4' || f.ext === 'webm')
         )
@@ -96,11 +106,11 @@ export const getVideoInfo = async (req, res) => {
           quality: format.format_note || `${format.height}p`,
           resolution: `${format.width}x${format.height}`,
           format: format.ext,
-          size: format.filesize 
+          size: format.filesize
             ? `${(format.filesize / 1024 / 1024).toFixed(2)} MB`
             : format.filesize_approx
-            ? `~${(format.filesize_approx / 1024 / 1024).toFixed(2)} MB`
-            : 'Unknown',
+              ? `~${(format.filesize_approx / 1024 / 1024).toFixed(2)} MB`
+              : 'Unknown',
           formatId: format.format_id,
           fps: format.fps,
           type: 'video-audio-merged',
@@ -117,12 +127,12 @@ export const getVideoInfo = async (req, res) => {
       const bestAudio = info.formats
         .filter(af => af.acodec && af.acodec !== 'none' && (!af.vcodec || af.vcodec === 'none'))
         .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
-      
+
       const audioFormatId = bestAudio?.format_id || '140';
 
       const videoOnlyFormats = (info.formats || [])
-        .filter(f => 
-          f.vcodec && f.vcodec !== 'none' && 
+        .filter(f =>
+          f.vcodec && f.vcodec !== 'none' &&
           (!f.acodec || f.acodec === 'none') &&
           f.height && f.height >= 720 &&
           f.ext === 'mp4'
@@ -131,7 +141,7 @@ export const getVideoInfo = async (req, res) => {
           quality: `${format.height}p HD`,
           resolution: `${format.width}x${format.height}`,
           format: 'mp4',
-          size: format.filesize 
+          size: format.filesize
             ? `${(format.filesize / 1024 / 1024).toFixed(2)} MB`
             : 'Unknown',
           formatId: `${format.format_id}+${audioFormatId}`,
@@ -151,14 +161,14 @@ export const getVideoInfo = async (req, res) => {
       allFormats = [...videoOnlyFormats, ...videoFormatsWithAudio].slice(0, 6);
 
       const audioFormats = (info.formats || [])
-        .filter(f => 
-          f.acodec && f.acodec !== 'none' && 
+        .filter(f =>
+          f.acodec && f.acodec !== 'none' &&
           (!f.vcodec || f.vcodec === 'none')
         )
         .map(format => ({
           quality: format.abr ? `${format.abr}kbps` : 'Audio',
           format: format.ext,
-          size: format.filesize 
+          size: format.filesize
             ? `${(format.filesize / 1024 / 1024).toFixed(2)} MB`
             : 'Unknown',
           formatId: format.format_id,
@@ -173,7 +183,7 @@ export const getVideoInfo = async (req, res) => {
       const bestAudio = info.formats
         ?.filter(f => f.acodec && f.acodec !== 'none' && (!f.vcodec || f.vcodec === 'none'))
         .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
-      
+
       const audioFormatId = bestAudio?.format_id;
 
       const videoFormats = (info.formats || [])
@@ -193,7 +203,7 @@ export const getVideoInfo = async (req, res) => {
         .map(format => {
           const hasAudio = hasAudioTrack(format);
           let finalFormatId;
-          
+
           if (hasAudio) {
             finalFormatId = format.format_id;
           } else if (audioFormatId) {
@@ -201,16 +211,16 @@ export const getVideoInfo = async (req, res) => {
           } else {
             finalFormatId = format.format_id;
           }
-          
+
           return {
             quality: format.height ? `${format.height}p` : 'Video',
             resolution: format.width && format.height ? `${format.width}x${format.height}` : 'Unknown',
             format: format.ext || 'mp4',
-            size: format.filesize 
+            size: format.filesize
               ? `${(format.filesize / 1024 / 1024).toFixed(2)} MB`
               : format.filesize_approx
-              ? `~${(format.filesize_approx / 1024 / 1024).toFixed(2)} MB`
-              : 'Unknown',
+                ? `~${(format.filesize_approx / 1024 / 1024).toFixed(2)} MB`
+                : 'Unknown',
             formatId: finalFormatId,
             fps: format.fps,
             type: hasAudio ? 'video-audio-merged' : 'video-needs-merge',
@@ -230,7 +240,7 @@ export const getVideoInfo = async (req, res) => {
         .map(format => ({
           quality: format.abr ? `${format.abr}kbps` : 'Audio',
           format: format.ext,
-          size: format.filesize 
+          size: format.filesize
             ? `${(format.filesize / 1024 / 1024).toFixed(2)} MB`
             : 'Unknown',
           formatId: format.format_id,
@@ -291,8 +301,8 @@ export const getVideoInfo = async (req, res) => {
       });
     }
 
-    if (error.message.includes('Video unavailable') || error.message.includes('Private video') || 
-        error.message.includes('not available') || error.message.includes('been deleted')) {
+    if (error.message.includes('Video unavailable') || error.message.includes('Private video') ||
+      error.message.includes('not available') || error.message.includes('been deleted')) {
       return res.status(404).json({
         success: false,
         error: 'Video not found',
@@ -300,8 +310,8 @@ export const getVideoInfo = async (req, res) => {
       });
     }
 
-    if (error.message.includes('login required') || error.message.includes('Sign in') || 
-        error.message.includes('members-only') || error.message.includes('This content is not available')) {
+    if (error.message.includes('login required') || error.message.includes('Sign in') ||
+      error.message.includes('members-only') || error.message.includes('This content is not available')) {
       return res.status(403).json({
         success: false,
         error: 'Authentication required',
@@ -327,7 +337,7 @@ export const getVideoInfo = async (req, res) => {
 
 export const downloadVideo = async (req, res) => {
   let tempFilePath = null;
-  
+
   try {
     const { formatId } = req.params;
     const { url } = req.query;
@@ -339,7 +349,18 @@ export const downloadVideo = async (req, res) => {
       });
     }
 
-    const info = await ytDlpWrap(url, { dumpSingleJson: true });
+    // const info = await ytDlpWrap(url, { dumpSingleJson: true });
+
+    const info = await ytDlpWrap(url, {
+      dumpSingleJson: true,
+      jsRuntimes: 'node',
+      extractorArgs: 'youtube:player_client=android',
+      userAgent: 'Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
+      cookies: COOKIES_PATH,
+      noWarnings: true,
+      noCheckCertificate: true,
+      noPlaylist: true
+    });
 
     const sanitizedTitle = info.title
       .replace(/[^\w\s-]/g, '')
@@ -348,13 +369,13 @@ export const downloadVideo = async (req, res) => {
 
     const timestamp = Date.now();
     const randomId = Math.random().toString(36).substring(7);
-    
+
     let filename, downloadOptions;
 
     if (formatId === 'mp3-best') {
       filename = `${sanitizedTitle}.mp3`;
       tempFilePath = path.join(TEMP_DIR, `${timestamp}_${randomId}.mp3`);
-      
+
       downloadOptions = {
         format: 'bestaudio',
         extractAudio: true,
@@ -363,17 +384,24 @@ export const downloadVideo = async (req, res) => {
         output: tempFilePath,
         noPlaylist: true,
       };
-      
+
+      // downloadOptions = {
+      //   ...downloadOptions,
+      //   jsRuntimes: 'node',
+      //   extractorArgs: 'youtube:player_client=android',
+      //   userAgent: 'Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
+      // };
+
       res.setHeader('Content-Type', 'audio/mpeg');
     } else {
       filename = `${sanitizedTitle}.mp4`;
       tempFilePath = path.join(TEMP_DIR, `${timestamp}_${randomId}.mp4`);
-      
+
       if (formatId.includes('+')) {
         const [videoId, audioId] = formatId.split('+');
         const videoExists = info.formats?.some(f => f.format_id === videoId);
         const audioExists = info.formats?.some(f => f.format_id === audioId);
-        
+
         downloadOptions = {
           format: (videoExists && audioExists) ? formatId : 'bestvideo+bestaudio/best',
           mergeOutputFormat: 'mp4',
@@ -382,10 +410,10 @@ export const downloadVideo = async (req, res) => {
         };
       } else {
         const requestedFormat = info.formats?.find(f => f.format_id === formatId);
-        
+
         if (requestedFormat) {
           const hasAudio = hasAudioTrack(requestedFormat);
-          
+
           downloadOptions = hasAudio ? {
             format: formatId,
             output: tempFilePath,
@@ -405,7 +433,7 @@ export const downloadVideo = async (req, res) => {
           };
         }
       }
-      
+
       res.setHeader('Content-Type', 'video/mp4');
     }
 
@@ -416,7 +444,7 @@ export const downloadVideo = async (req, res) => {
     }
 
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    
+
     const stat = fs.statSync(tempFilePath);
     res.setHeader('Content-Length', stat.size);
 
@@ -440,11 +468,11 @@ export const downloadVideo = async (req, res) => {
 
   } catch (error) {
     console.error('Download error:', error.message);
-    
+
     if (tempFilePath && fs.existsSync(tempFilePath)) {
       fs.unlinkSync(tempFilePath);
     }
-    
+
     if (!res.headersSent) {
       if (error.message.includes('unavailable for certain audiences') || error.message.includes('inappropriate')) {
         return res.status(403).json({
@@ -462,8 +490,8 @@ export const downloadVideo = async (req, res) => {
         });
       }
 
-      if (error.message.includes('Private video') || error.message.includes('members-only') || 
-          error.message.includes('login required') || error.message.includes('This content is not available')) {
+      if (error.message.includes('Private video') || error.message.includes('members-only') ||
+        error.message.includes('login required') || error.message.includes('This content is not available')) {
         return res.status(403).json({
           success: false,
           error: 'Private content',
@@ -487,7 +515,7 @@ export const downloadVideo = async (req, res) => {
         });
       }
 
-      res.status(500).json({ 
+      res.status(500).json({
         success: false,
         error: 'Download failed',
         message: error.message
