@@ -6,44 +6,55 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Create temp directory
 const TEMP_DIR = path.join(__dirname, '../temp');
 if (!fs.existsSync(TEMP_DIR)) {
   fs.mkdirSync(TEMP_DIR, { recursive: true });
 }
 
-// Helper: Detect platform from URL
 const detectPlatform = (url) => {
   if (url.includes('youtube.com') || url.includes('youtu.be')) return 'YouTube';
   if (url.includes('instagram.com')) return 'Instagram';
   if (url.includes('facebook.com') || url.includes('fb.watch')) return 'Facebook';
   if (url.includes('tiktok.com')) return 'TikTok';
   if (url.includes('twitter.com') || url.includes('x.com')) return 'Twitter';
+  if (url.includes('snapchat.com')) return 'Snapchat';
   if (url.includes('vimeo.com')) return 'Vimeo';
   if (url.includes('dailymotion.com')) return 'Dailymotion';
   if (url.includes('reddit.com')) return 'Reddit';
+  if (url.includes('twitch.tv')) return 'Twitch';
+  if (url.includes('linkedin.com')) return 'LinkedIn';
   return 'Unknown';
 };
 
-// Test API
+const isVideoFormat = (format) => {
+  if (format.vcodec && format.vcodec !== 'none') return true;
+  if (format.width && format.height && format.width > 0 && format.height > 0) return true;
+  return false;
+};
+
+const hasAudioTrack = (format) => {
+  if (format.acodec && format.acodec !== 'none') return true;
+  if ((format.acodec === undefined || format.acodec === null) &&
+      ['mp4', 'webm', 'mov'].includes(format.ext) &&
+      (format.vcodec !== 'none' || format.vcodec === undefined || format.vcodec === null)) {
+    return true;
+  }
+  return false;
+};
+
 export const testApi = (req, res) => {
   res.json({
     success: true,
     message: 'Multi-Platform Video Downloader API',
     engine: 'yt-dlp',
-    supported: 'YouTube, Instagram, Facebook, TikTok, Twitter, and 1000+ more',
+    supported: 'YouTube, Instagram, Facebook, TikTok, Twitter, Snapchat, Reddit, Vimeo, Twitch, LinkedIn, and 1000+ more',
     timestamp: new Date().toISOString()
   });
 };
 
-// Get video information with all available formats
 export const getVideoInfo = async (req, res) => {
   try {
     const { url } = req.body;
-
-    console.log('\n' + '='.repeat(50));
-    console.log('📥 Received request for:', url);
-    console.log('='.repeat(50));
 
     if (!url) {
       return res.status(400).json({ 
@@ -60,8 +71,6 @@ export const getVideoInfo = async (req, res) => {
     }
 
     const platform = detectPlatform(url);
-    console.log('🌐 Platform detected:', platform);
-    console.log('🔄 Fetching video info with yt-dlp...');
 
     const info = await ytDlpWrap(url, {
       dumpSingleJson: true,
@@ -74,20 +83,9 @@ export const getVideoInfo = async (req, res) => {
       ]
     });
 
-    console.log('✅ Video info fetched successfully!');
-    console.log('Title:', info.title);
-    console.log('Available formats:', info.formats?.length || 0);
-
     let allFormats = [];
 
-    // ============================================
-    // PLATFORM-SPECIFIC FORMAT HANDLING
-    // ============================================
-
     if (platform === 'YouTube') {
-      // YouTube: Has separate video and audio streams
-      
-      // Get formats with video AND audio (merged, ready to download)
       const videoFormatsWithAudio = (info.formats || [])
         .filter(f => 
           f.vcodec && f.vcodec !== 'none' && 
@@ -107,7 +105,8 @@ export const getVideoInfo = async (req, res) => {
           fps: format.fps,
           type: 'video-audio-merged',
           mediaType: 'video',
-          note: 'Ready to download'
+          note: 'Ready to download',
+          hasAudio: true
         }))
         .sort((a, b) => {
           const qualityA = parseInt(a.quality) || 0;
@@ -115,7 +114,6 @@ export const getVideoInfo = async (req, res) => {
           return qualityB - qualityA;
         });
 
-      // Get video-only formats (high quality, needs audio merge)
       const bestAudio = info.formats
         .filter(af => af.acodec && af.acodec !== 'none' && (!af.vcodec || af.vcodec === 'none'))
         .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
@@ -140,7 +138,8 @@ export const getVideoInfo = async (req, res) => {
           fps: format.fps,
           type: 'video-needs-merge',
           mediaType: 'video',
-          note: 'High quality (will merge with audio)'
+          note: 'High quality (will merge with audio)',
+          hasAudio: true
         }))
         .sort((a, b) => {
           const qualityA = parseInt(a.quality) || 0;
@@ -149,10 +148,8 @@ export const getVideoInfo = async (req, res) => {
         })
         .slice(0, 3);
 
-      // Combine formats
       allFormats = [...videoOnlyFormats, ...videoFormatsWithAudio].slice(0, 6);
 
-      // Audio formats
       const audioFormats = (info.formats || [])
         .filter(f => 
           f.acodec && f.acodec !== 'none' && 
@@ -166,48 +163,70 @@ export const getVideoInfo = async (req, res) => {
             : 'Unknown',
           formatId: format.format_id,
           type: 'audio',
-          mediaType: 'audio'
+          mediaType: 'audio',
+          hasAudio: true
         }))
         .slice(0, 2);
 
       allFormats = [...allFormats, ...audioFormats];
-    } 
-    else {
-      // ============================================
-      // OTHER PLATFORMS (Instagram, Twitter, TikTok, Facebook, etc.)
-      // ============================================
+    } else {
+      const bestAudio = info.formats
+        ?.filter(f => f.acodec && f.acodec !== 'none' && (!f.vcodec || f.vcodec === 'none'))
+        .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
       
-      // For non-YouTube platforms, get all available video formats
+      const audioFormatId = bestAudio?.format_id;
+
       const videoFormats = (info.formats || [])
-        .filter(f => f.vcodec && f.vcodec !== 'none')
-        .map(format => ({
-          quality: format.height ? `${format.height}p` : 'Video',
-          resolution: format.width && format.height ? `${format.width}x${format.height}` : 'Unknown',
-          format: format.ext || 'mp4',
-          size: format.filesize 
-            ? `${(format.filesize / 1024 / 1024).toFixed(2)} MB`
-            : format.filesize_approx
-            ? `~${(format.filesize_approx / 1024 / 1024).toFixed(2)} MB`
-            : 'Unknown',
-          formatId: format.format_id,
-          fps: format.fps,
-          type: (format.acodec && format.acodec !== 'none') ? 'video-audio-merged' : 'video-only',
-          mediaType: 'video',
-          note: (format.acodec && format.acodec !== 'none') ? 'Ready to download' : 'Video only',
-          hasAudio: format.acodec && format.acodec !== 'none'
-        }))
+        .filter(f => {
+          if (f.vcodec === 'none') return false;
+          if (f.vcodec && f.vcodec !== 'none') return true;
+          if (f.width && f.height && f.width > 0 && f.height > 0) {
+            if (['mp4', 'webm', 'mov', 'm4v'].includes(f.ext)) return true;
+          }
+          if (['mp4', 'webm', 'mov', 'm4v'].includes(f.ext) && f.url) {
+            if (!f.acodec || f.acodec === 'none' || f.acodec === undefined || f.acodec === null) return true;
+            if ((f.vcodec === null || f.vcodec === undefined) && (f.acodec === null || f.acodec === undefined)) return true;
+          }
+          if (f.format_id && f.format_id.includes('video')) return true;
+          return false;
+        })
+        .map(format => {
+          const hasAudio = hasAudioTrack(format);
+          let finalFormatId;
+          
+          if (hasAudio) {
+            finalFormatId = format.format_id;
+          } else if (audioFormatId) {
+            finalFormatId = `${format.format_id}+${audioFormatId}`;
+          } else {
+            finalFormatId = format.format_id;
+          }
+          
+          return {
+            quality: format.height ? `${format.height}p` : 'Video',
+            resolution: format.width && format.height ? `${format.width}x${format.height}` : 'Unknown',
+            format: format.ext || 'mp4',
+            size: format.filesize 
+              ? `${(format.filesize / 1024 / 1024).toFixed(2)} MB`
+              : format.filesize_approx
+              ? `~${(format.filesize_approx / 1024 / 1024).toFixed(2)} MB`
+              : 'Unknown',
+            formatId: finalFormatId,
+            fps: format.fps,
+            type: hasAudio ? 'video-audio-merged' : 'video-needs-merge',
+            mediaType: 'video',
+            note: hasAudio ? 'Ready to download' : (audioFormatId ? 'Will merge with audio' : 'Video only'),
+            hasAudio: hasAudio || !!audioFormatId
+          };
+        })
         .sort((a, b) => {
           const qualityA = parseInt(a.quality) || 0;
           const qualityB = parseInt(b.quality) || 0;
           return qualityB - qualityA;
         });
 
-      // Get audio formats
       const audioFormats = (info.formats || [])
-        .filter(f => 
-          f.acodec && f.acodec !== 'none' && 
-          (!f.vcodec || f.vcodec === 'none')
-        )
+        .filter(f => f.acodec && f.acodec !== 'none' && (!f.vcodec || f.vcodec === 'none'))
         .map(format => ({
           quality: format.abr ? `${format.abr}kbps` : 'Audio',
           format: format.ext,
@@ -216,27 +235,24 @@ export const getVideoInfo = async (req, res) => {
             : 'Unknown',
           formatId: format.format_id,
           type: 'audio',
-          mediaType: 'audio'
-        }));
+          mediaType: 'audio',
+          hasAudio: true
+        }))
+        .slice(0, 2);
 
       allFormats = [...videoFormats, ...audioFormats];
     }
 
-    // Add MP3 conversion option
-    const mp3Option = {
+    allFormats.push({
       quality: 'MP3 Audio',
       format: 'mp3',
       size: 'Varies',
       formatId: 'mp3-best',
       type: 'audio',
       mediaType: 'audio-converted',
-      note: 'Best audio converted to MP3'
-    };
-
-    allFormats = [...allFormats, mp3Option];
-
-    console.log('📦 Prepared', allFormats.length, 'download options');
-    console.log('='.repeat(50) + '\n');
+      note: 'Best audio converted to MP3',
+      hasAudio: true
+    });
 
     res.json({
       success: true,
@@ -257,24 +273,47 @@ export const getVideoInfo = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('\n' + '❌'.repeat(25));
-    console.error('ERROR:', error.message);
-    console.error('Stack:', error.stack);
-    console.error('❌'.repeat(25) + '\n');
+    console.error('Video info error:', error.message);
 
-    // Handle specific errors
-    if (error.message.includes('Unsupported URL')) {
-      return res.status(400).json({
+    if (error.message.includes('unavailable for certain audiences') || error.message.includes('inappropriate')) {
+      return res.status(403).json({
         success: false,
-        error: 'This platform is not supported',
-        message: 'Please use a supported platform like YouTube, Instagram, Facebook, TikTok, etc.'
+        error: 'Content restricted',
+        message: 'This Instagram content is age-restricted or unavailable for certain audiences. Try a public reel instead.'
       });
     }
 
-    if (error.message.includes('Video unavailable') || error.message.includes('Private video')) {
+    if (error.message.includes('Unsupported URL')) {
+      return res.status(400).json({
+        success: false,
+        error: 'Platform not supported',
+        message: 'Please use a supported platform like YouTube, Instagram, Facebook, TikTok, Twitter, etc.'
+      });
+    }
+
+    if (error.message.includes('Video unavailable') || error.message.includes('Private video') || 
+        error.message.includes('not available') || error.message.includes('been deleted')) {
       return res.status(404).json({
         success: false,
-        error: 'Video not found or is private'
+        error: 'Video not found',
+        message: 'This video is unavailable, deleted, or private.'
+      });
+    }
+
+    if (error.message.includes('login required') || error.message.includes('Sign in') || 
+        error.message.includes('members-only') || error.message.includes('This content is not available')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Authentication required',
+        message: 'This content requires login or is members-only. For Snapchat, only public Spotlight videos are supported.'
+      });
+    }
+
+    if (error.message.includes('not available in your country') || error.message.includes('geo-restricted')) {
+      return res.status(451).json({
+        success: false,
+        error: 'Content blocked',
+        message: 'This video is not available in your region.'
       });
     }
 
@@ -286,19 +325,12 @@ export const getVideoInfo = async (req, res) => {
   }
 };
 
-// Download video/audio - UNIVERSAL VERSION
 export const downloadVideo = async (req, res) => {
   let tempFilePath = null;
   
   try {
     const { formatId } = req.params;
     const { url } = req.query;
-
-    console.log('\n' + '='.repeat(50));
-    console.log('📥 Download request');
-    console.log('URL:', url);
-    console.log('Format ID:', formatId);
-    console.log('='.repeat(50));
 
     if (!url) {
       return res.status(400).json({
@@ -307,34 +339,21 @@ export const downloadVideo = async (req, res) => {
       });
     }
 
-    const platform = detectPlatform(url);
-    console.log('🌐 Platform:', platform);
-    console.log('🔄 Getting video info...');
+    const info = await ytDlpWrap(url, { dumpSingleJson: true });
 
-    const info = await ytDlpWrap(url, {
-      dumpSingleJson: true,
-    });
-
-    console.log('🎬 Title:', info.title);
-
-    // Sanitize filename
     const sanitizedTitle = info.title
       .replace(/[^\w\s-]/g, '')
       .replace(/\s+/g, '_')
       .substring(0, 100);
 
-    // Generate unique temp filename
     const timestamp = Date.now();
     const randomId = Math.random().toString(36).substring(7);
     
     let filename, downloadOptions;
 
-    // Handle MP3 conversion
     if (formatId === 'mp3-best') {
       filename = `${sanitizedTitle}.mp3`;
       tempFilePath = path.join(TEMP_DIR, `${timestamp}_${randomId}.mp3`);
-      
-      console.log('🎵 Converting to MP3...');
       
       downloadOptions = {
         format: 'bestaudio',
@@ -346,123 +365,128 @@ export const downloadVideo = async (req, res) => {
       };
       
       res.setHeader('Content-Type', 'audio/mpeg');
-    } 
-    // Handle format selection (video)
-    else {
+    } else {
       filename = `${sanitizedTitle}.mp4`;
       tempFilePath = path.join(TEMP_DIR, `${timestamp}_${randomId}.mp4`);
       
-      // Check if format exists
-      const requestedFormat = info.formats?.find(f => f.format_id === formatId);
-      const formatExists = requestedFormat !== undefined;
-      
-      let finalFormat;
-      
       if (formatId.includes('+')) {
-        // Format merge requested
         const [videoId, audioId] = formatId.split('+');
         const videoExists = info.formats?.some(f => f.format_id === videoId);
         const audioExists = info.formats?.some(f => f.format_id === audioId);
         
-        if (videoExists && audioExists) {
-          finalFormat = formatId;
-          console.log('🔄 Merging video and audio...');
-          console.log('   Format string:', formatId);
-        } else {
-          finalFormat = 'bestvideo+bestaudio/best';
-          console.log('⚠️  Requested format not available');
-          console.log('   Using best available quality instead');
-        }
-        
         downloadOptions = {
-          format: finalFormat,
+          format: (videoExists && audioExists) ? formatId : 'bestvideo+bestaudio/best',
           mergeOutputFormat: 'mp4',
           output: tempFilePath,
           noPlaylist: true,
         };
-      } 
-      else if (formatExists) {
-        // Specific format exists
-        console.log('📹 Downloading format:', formatId);
-        downloadOptions = {
-          format: formatId,
-          output: tempFilePath,
-          noPlaylist: true,
-        };
-      } 
-      else {
-        // Format doesn't exist, use best
-        console.log('⚠️  Format not found, using best available');
-        downloadOptions = {
-          format: 'best',
-          output: tempFilePath,
-          noPlaylist: true,
-        };
+      } else {
+        const requestedFormat = info.formats?.find(f => f.format_id === formatId);
+        
+        if (requestedFormat) {
+          const hasAudio = hasAudioTrack(requestedFormat);
+          
+          downloadOptions = hasAudio ? {
+            format: formatId,
+            output: tempFilePath,
+            noPlaylist: true,
+          } : {
+            format: `${formatId}+bestaudio`,
+            mergeOutputFormat: 'mp4',
+            output: tempFilePath,
+            noPlaylist: true,
+          };
+        } else {
+          downloadOptions = {
+            format: 'bestvideo+bestaudio/best',
+            mergeOutputFormat: 'mp4',
+            output: tempFilePath,
+            noPlaylist: true,
+          };
+        }
       }
       
       res.setHeader('Content-Type', 'video/mp4');
     }
 
-    console.log('📤 Starting download...');
-    console.log('   Filename:', filename);
-    console.log('   Temp file:', tempFilePath);
-
-    // Download to temp file
     await ytDlpWrap(url, downloadOptions);
 
-    console.log('✅ Download completed!');
-    console.log('📦 Sending file to client...');
-
-    // Check if file exists
     if (!fs.existsSync(tempFilePath)) {
       throw new Error('Downloaded file not found');
     }
 
-    // Set headers
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     
-    // Get file size
     const stat = fs.statSync(tempFilePath);
     res.setHeader('Content-Length', stat.size);
 
-    console.log('   File size:', (stat.size / 1024 / 1024).toFixed(2), 'MB');
-
-    // Stream the completed file
     const fileStream = fs.createReadStream(tempFilePath);
-    
     fileStream.pipe(res);
 
-    // Clean up temp file after sending
     fileStream.on('end', () => {
-      console.log('✅ File sent successfully!');
       setTimeout(() => {
         if (fs.existsSync(tempFilePath)) {
           fs.unlinkSync(tempFilePath);
-          console.log('🗑️ Temp file deleted');
         }
       }, 5000);
     });
 
     fileStream.on('error', (error) => {
-      console.error('❌ Stream error:', error);
+      console.error('Stream error:', error.message);
       if (fs.existsSync(tempFilePath)) {
         fs.unlinkSync(tempFilePath);
       }
     });
 
-    console.log('='.repeat(50) + '\n');
-
   } catch (error) {
-    console.error('\n' + '❌'.repeat(25));
-    console.error('ERROR:', error.message);
-    console.error('❌'.repeat(25) + '\n');
+    console.error('Download error:', error.message);
     
-    // Clean up temp file on error
     if (tempFilePath && fs.existsSync(tempFilePath)) {
       fs.unlinkSync(tempFilePath);
     }
     
     if (!res.headersSent) {
+      if (error.message.includes('unavailable for certain audiences') || error.message.includes('inappropriate')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Content restricted',
+          message: 'This Instagram content is age-restricted or unavailable for certain audiences. Try a public reel instead.'
+        });
+      }
+
+      if (error.message.includes('Video unavailable') || error.message.includes('not available') || error.message.includes('been deleted')) {
+        return res.status(404).json({
+          success: false,
+          error: 'Video not found',
+          message: 'This video is unavailable, deleted, or private.'
+        });
+      }
+
+      if (error.message.includes('Private video') || error.message.includes('members-only') || 
+          error.message.includes('login required') || error.message.includes('This content is not available')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Private content',
+          message: 'This video is private or requires login to access. For Snapchat, only public Spotlight videos are supported.'
+        });
+      }
+
+      if (error.message.includes('not available in your country') || error.message.includes('geo')) {
+        return res.status(451).json({
+          success: false,
+          error: 'Content blocked',
+          message: 'This video is not available in your region.'
+        });
+      }
+
+      if (error.message.includes('Requested format is not available')) {
+        return res.status(400).json({
+          success: false,
+          error: 'Format unavailable',
+          message: 'The requested quality is not available. Try a different format.'
+        });
+      }
+
       res.status(500).json({ 
         success: false,
         error: 'Download failed',
