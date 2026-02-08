@@ -1,9 +1,13 @@
 import express from 'express';
-import { getVideoInfo, testApi } from '../controller/videoController.js'; 
+import { testApi, getVideoInfo, downloadVideo } from '../controller/videoController.js';
 
 const router = express.Router();
 
-router.post('/video-info', getVideoInfo);
+
 router.get('/test', testApi);
 
-export default router; 
+router.post('/video-info', getVideoInfo);
+
+router.get('/download/:formatId', downloadVideo);
+
+export default router;

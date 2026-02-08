@@ -11,15 +11,15 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "YouTube video downloader",
   "dependencies": {
-    "@distube/ytdl-core": "^4.16.12",
     "axios": "^1.13.4",
     "cors": "^2.8.6",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "ws": "^8.18.0",
-    "wss": "^3.3.4"
+    "wss": "^3.3.4",
+    "yt-dlp-exec": "^1.0.2"
   },
   "devDependencies": {
     "nodemon": "^3.1.11"
