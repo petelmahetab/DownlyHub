@@ -7,6 +7,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const TEMP_DIR = path.join(__dirname, '../temp');
+const COOKIES_FILE = path.join(process.cwd(), 'cookies', 'youtube_cookies.txt');
+
 if (!fs.existsSync(TEMP_DIR)) {
   fs.mkdirSync(TEMP_DIR, { recursive: true });
 }
@@ -18,6 +20,7 @@ const detectPlatform = (url) => {
   if (url.includes('tiktok.com')) return 'TikTok';
   if (url.includes('twitter.com') || url.includes('x.com')) return 'Twitter';
   if (url.includes('snapchat.com')) return 'Snapchat';
+  if (url.includes('linkedin.com')) return 'Linkdin';
   return 'Unknown';
 };
 
@@ -31,10 +34,9 @@ const hasAudioTrack = (format) => {
   return false;
 };
 
-// Multiple fallback strategies for YouTube
+// NUCLEAR OPTION - ALL POSSIBLE STRATEGIES
 const getYtDlpStrategies = (platform) => {
   if (platform !== 'YouTube') {
-    // For non-YouTube platforms, use standard options
     return [{
       name: 'Standard',
       options: {
@@ -48,70 +50,162 @@ const getYtDlpStrategies = (platform) => {
   }
 
   const strategies = [];
-  const hasProxy = !!process.env.SCRAPERAPI_KEY;
+  const hasCookieFile = fs.existsSync(COOKIES_FILE);
 
-  // Strategy 1: iOS with Proxy (if available)
-  if (hasProxy) {
+  if (hasCookieFile) {
+    console.log('✅ Found cookie file');
+    try {
+      const cookieContent = fs.readFileSync(COOKIES_FILE, 'utf8');
+      const cookieLines = cookieContent.split('\n').filter(line => !line.startsWith('#') && line.trim());
+      console.log(`📊 Cookie file has ${cookieLines.length} valid entries`);
+    } catch (err) {
+      console.log('⚠️ Could not read cookie file:', err.message);
+    }
+  }
+
+  // Strategy 1: iOS with cookies (if available)
+  if (hasCookieFile) {
     strategies.push({
-      name: 'iOS + Proxy',
+      name: 'iOS + Cookies',
       options: {
         dumpSingleJson: true,
         noWarnings: true,
         noCheckCertificate: true,
         noPlaylist: true,
+        cookies: COOKIES_FILE,
         extractorArgs: 'youtube:player_client=ios',
         userAgent: 'com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)',
-        proxy: `http://scraperapi:${process.env.SCRAPERAPI_KEY}@proxy-server.scraperapi.com:8001`,
       }
     });
   }
 
+  // Strategy 2: iOS without cookies (OFTEN WORKS BEST)
   strategies.push({
-    name: 'Android Embedded',
+    name: 'iOS Pure',
     options: {
       dumpSingleJson: true,
       noWarnings: true,
       noCheckCertificate: true,
       noPlaylist: true,
-      extractorArgs: 'youtube:player_client=android_embedded',
-      userAgent: 'com.google.android.youtube/17.36.4 (Linux; U; Android 12; GB) gzip',
+      extractorArgs: 'youtube:player_client=ios',
+      userAgent: 'com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)',
     }
   });
 
+  // Strategy 3: Android Music
   strategies.push({
-    name: 'Web',
+    name: 'Android Music',
     options: {
       dumpSingleJson: true,
       noWarnings: true,
       noCheckCertificate: true,
       noPlaylist: true,
-      extractorArgs: 'youtube:player_client=web',
+      extractorArgs: 'youtube:player_client=android_music',
     }
   });
 
-  // Strategy 4: No special client (let yt-dlp decide)
+  // Strategy 4: Media Connect
   strategies.push({
-    name: 'Auto',
+    name: 'Media Connect',
     options: {
       dumpSingleJson: true,
       noWarnings: true,
       noCheckCertificate: true,
       noPlaylist: true,
+      extractorArgs: 'youtube:player_client=mediaconnect',
+    }
+  });
+
+  // Strategy 5: TV Embedded
+  strategies.push({
+    name: 'TV Embedded',
+    options: {
+      dumpSingleJson: true,
+      noWarnings: true,
+      noCheckCertificate: true,
+      noPlaylist: true,
+      extractorArgs: 'youtube:player_client=tv_embedded',
+    }
+  });
+
+  // Strategy 6: Android VR
+  strategies.push({
+    name: 'Android VR',
+    options: {
+      dumpSingleJson: true,
+      noWarnings: true,
+      noCheckCertificate: true,
+      noPlaylist: true,
+      extractorArgs: 'youtube:player_client=android_vr',
+    }
+  });
+
+  // Strategy 7: mWeb (mobile web)
+  strategies.push({
+    name: 'Mobile Web',
+    options: {
+      dumpSingleJson: true,
+      noWarnings: true,
+      noCheckCertificate: true,
+      noPlaylist: true,
+      extractorArgs: 'youtube:player_client=mweb',
+      userAgent: 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+    }
+  });
+
+  // Strategy 8: Web with skip
+  strategies.push({
+    name: 'Web Skip',
+    options: {
+      dumpSingleJson: true,
+      noWarnings: true,
+      noCheckCertificate: true,
+      noPlaylist: true,
+      extractorArgs: 'youtube:player_skip=webpage,configs',
     }
   });
 
   return strategies;
 };
 
+const deduplicateFormats = (formats) => {
+  const seen = new Map();
+  const uniqueFormats = [];
+
+  for (const format of formats) {
+    const key = `${format.quality}-${format.mediaType}`;
+    
+    if (!seen.has(key)) {
+      seen.set(key, true);
+      uniqueFormats.push(format);
+    } else {
+      const existingIndex = uniqueFormats.findIndex(f => 
+        f.quality === format.quality && f.mediaType === format.mediaType
+      );
+      
+      if (existingIndex !== -1) {
+        const existing = uniqueFormats[existingIndex];
+        if (format.hasAudio && !existing.hasAudio) {
+          uniqueFormats[existingIndex] = format;
+        }
+      }
+    }
+  }
+
+  return uniqueFormats;
+};
+
 export const testApi = (req, res) => {
+  const hasCookieFile = fs.existsSync(COOKIES_FILE);
+  
   res.json({
     success: true,
-    message: 'Multi-Platform Video Downloader API',
-    engine: 'yt-dlp',
-    proxyEnabled: !!process.env.SCRAPERAPI_KEY,
-    strategies: 4,
+    message: 'Multi-Platform Video Downloader API - NUCLEAR MODE',
+    cookieFile: hasCookieFile ? 'Found' : 'Not Found',
+    strategies: 8,
+    mode: 'Maximum Compatibility',
     supported: 'YouTube, Instagram, Facebook, TikTok, Twitter, Snapchat, and 1000+ more',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 };
 
@@ -134,38 +228,50 @@ export const getVideoInfo = async (req, res) => {
     }
 
     const platform = detectPlatform(url);
-
-    console.log(`📥 Fetching info for ${platform}: ${url.substring(0, 60)}...`);
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`📥 FETCH REQUEST: ${platform}`);
+    console.log(`🔗 URL: ${url.substring(0, 80)}...`);
+    console.log(`${'='.repeat(60)}\n`);
 
     const strategies = getYtDlpStrategies(platform);
     let info = null;
     let successStrategy = null;
     let lastError = null;
+    let attemptCount = 0;
 
-    // Try each strategy until one works
     for (const strategy of strategies) {
+      attemptCount++;
       try {
-        console.log(`🔄 Trying strategy: ${strategy.name}`);
+        console.log(`🔄 [${attemptCount}/${strategies.length}] Trying: ${strategy.name}`);
+        
+        const startTime = Date.now();
         info = await ytDlpWrap(url, strategy.options);
+        const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+        
         successStrategy = strategy.name;
-        console.log(`✅ Success with ${strategy.name}: ${info.title?.substring(0, 50)}...`);
+        console.log(`✅ SUCCESS in ${duration}s with ${strategy.name}`);
+        console.log(`📹 Video: ${info.title?.substring(0, 60)}...`);
+        console.log(`👤 Uploader: ${info.uploader || info.channel || 'Unknown'}`);
+        console.log(`📊 Formats found: ${info.formats?.length || 0}`);
         break;
       } catch (error) {
-        console.log(`❌ ${strategy.name} failed: ${error.message.substring(0, 100)}`);
+        const errorMsg = error.message.substring(0, 120);
+        console.log(`❌ [${attemptCount}/${strategies.length}] ${strategy.name} failed`);
+        console.log(`   Error: ${errorMsg}...`);
         lastError = error;
         continue;
       }
     }
 
-    // If all strategies failed, throw the last error
     if (!info) {
+      console.log(`\n❌ ALL ${strategies.length} STRATEGIES FAILED`);
+      console.log(`Last error: ${lastError?.message.substring(0, 200)}\n`);
       throw lastError || new Error('All download strategies failed');
     }
 
     let allFormats = [];
 
     if (platform === 'YouTube') {
-      // Pre-merged formats
       const videoFormatsWithAudio = (info.formats || [])
         .filter(f =>
           f.vcodec && f.vcodec !== 'none' &&
@@ -194,14 +300,12 @@ export const getVideoInfo = async (req, res) => {
           return qualityB - qualityA;
         });
 
-      // Best audio
       const bestAudio = info.formats
         .filter(af => af.acodec && af.acodec !== 'none' && (!af.vcodec || af.vcodec === 'none'))
         .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
 
       const audioFormatId = bestAudio?.format_id || '140';
 
-      // High-quality video-only formats
       const videoOnlyFormats = (info.formats || [])
         .filter(f =>
           f.vcodec && f.vcodec !== 'none' &&
@@ -230,9 +334,8 @@ export const getVideoInfo = async (req, res) => {
         })
         .slice(0, 4);
 
-      allFormats = [...videoOnlyFormats, ...videoFormatsWithAudio].slice(0, 8);
+      allFormats = [...videoOnlyFormats, ...videoFormatsWithAudio];
 
-      // Audio formats
       const audioFormats = (info.formats || [])
         .filter(f =>
           f.acodec && f.acodec !== 'none' &&
@@ -240,6 +343,7 @@ export const getVideoInfo = async (req, res) => {
         )
         .map(format => ({
           quality: format.abr ? `${format.abr}kbps` : 'Audio',
+          resolution: 'Audio Only',
           format: format.ext,
           size: format.filesize
             ? `${(format.filesize / 1024 / 1024).toFixed(2)} MB`
@@ -247,13 +351,13 @@ export const getVideoInfo = async (req, res) => {
           formatId: format.format_id,
           type: 'audio',
           mediaType: 'audio',
+          note: 'Audio only',
           hasAudio: true
         }))
         .slice(0, 1);
 
       allFormats = [...allFormats, ...audioFormats];
     } else {
-      // Non-YouTube platforms (Instagram, Twitter, Snapchat, LinkedIn, etc.)
       const bestAudio = info.formats
         ?.filter(f => f.acodec && f.acodec !== 'none' && (!f.vcodec || f.vcodec === 'none'))
         .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
@@ -263,31 +367,20 @@ export const getVideoInfo = async (req, res) => {
       const videoFormats = (info.formats || [])
         .filter(f => {
           if (f.vcodec === 'none') return false;
-
-          // Method 1: Has explicit video codec (Instagram, Facebook, TikTok)
           if (f.vcodec && f.vcodec !== 'none') return true;
-
-          // Method 2: Has dimensions (Twitter, some platforms)
           if (f.width && f.height && f.width > 0 && f.height > 0) {
             if (['mp4', 'webm', 'mov', 'm4v'].includes(f.ext)) return true;
           }
-
-          // Method 3: Is mp4/webm/mov with URL (Snapchat, LinkedIn)
           if (['mp4', 'webm', 'mov', 'm4v'].includes(f.ext) && f.url) {
-            // Only include if not explicitly audio-only
             if (!f.acodec || f.acodec === 'none' || f.acodec === undefined || f.acodec === null) {
               return true;
             }
-            // Include if both codecs are null/undefined (Snapchat/LinkedIn case)
             if ((f.vcodec === null || f.vcodec === undefined) &&
               (f.acodec === null || f.acodec === undefined)) {
               return true;
             }
           }
-
-          // Method 4: Format ID suggests video
           if (f.format_id && f.format_id.includes('video')) return true;
-
           return false;
         })
         .map(format => {
@@ -321,9 +414,12 @@ export const getVideoInfo = async (req, res) => {
       allFormats = videoFormats;
     }
 
-    // MP3 option
+    allFormats = deduplicateFormats(allFormats);
+    allFormats = allFormats.slice(0, 6);
+
     allFormats.push({
       quality: 'MP3 Audio',
+      resolution: 'Audio Only',
       format: 'mp3',
       size: 'Varies',
       formatId: 'mp3-best',
@@ -333,7 +429,8 @@ export const getVideoInfo = async (req, res) => {
       hasAudio: true
     });
 
-    console.log(`📊 Found ${allFormats.length} formats using ${successStrategy}`);
+    console.log(`\n✅ COMPLETED: ${allFormats.length} formats prepared`);
+    console.log(`📤 Sending response...\n`);
 
     res.json({
       success: true,
@@ -355,18 +452,31 @@ export const getVideoInfo = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ All strategies failed. Last error:', error.message);
+    console.error('\n❌ FATAL ERROR:', error.message, '\n');
+
+    if (error.message.includes('Sign in to confirm') || 
+        error.message.includes('not a bot')) {
+      return res.status(403).json({
+        success: false,
+        error: 'YouTube Bot Detection',
+        message: 'All bypass methods failed. This video may be region-restricted or age-gated.',
+        suggestions: [
+          '1. Try updating yt-dlp: npm update yt-dlp-exec',
+          '2. Try a different YouTube video',
+          '3. Video might be region-locked or age-restricted',
+          '4. Try again in a few minutes (rate limiting)'
+        ]
+      });
+    }
 
     if (error.message.includes('Video unavailable') ||
       error.message.includes('Private video') ||
       error.message.includes('not available') ||
-      error.message.includes('been deleted') ||
-      error.message.includes('This video is unavailable')) {
+      error.message.includes('been deleted')) {
       return res.status(404).json({
         success: false,
         error: 'Video not found',
-        message: 'This video is unavailable, deleted, or private. Try a different YouTube video.',
-        hint: 'Test with: https://www.youtube.com/watch?v=jNQXAC9IVRw (popular "Me at the zoo" video)'
+        message: 'This video is unavailable, deleted, or private.',
       });
     }
 
@@ -374,7 +484,6 @@ export const getVideoInfo = async (req, res) => {
       success: false,
       error: 'Failed to fetch video information',
       message: error.message,
-      hint: 'Try testing with a different YouTube video'
     });
   }
 };
@@ -394,27 +503,25 @@ export const downloadVideo = async (req, res) => {
     }
 
     const platform = detectPlatform(url);
+    console.log(`\n📥 DOWNLOAD REQUEST: ${platform}`);
+    console.log(`Format: ${formatId}`);
 
-    console.log(`📥 Downloading ${platform}: ${url.substring(0, 60)}...`);
-
-    // Get video info with fallback strategies
     const strategies = getYtDlpStrategies(platform);
     let info = null;
 
     for (const strategy of strategies) {
       try {
-        console.log(`🔄 Info fetch with: ${strategy.name}`);
+        console.log(`🔄 Fetching with: ${strategy.name}`);
         info = await ytDlpWrap(url, strategy.options);
-        console.log(`✅ Info fetched with ${strategy.name}`);
+        console.log(`✅ Info fetched`);
         break;
       } catch (error) {
-        console.log(`❌ ${strategy.name} failed`);
         continue;
       }
     }
 
     if (!info) {
-      throw new Error('Could not fetch video info with any strategy');
+      throw new Error('Could not fetch video info');
     }
 
     const sanitizedTitle = info.title
@@ -431,10 +538,11 @@ export const downloadVideo = async (req, res) => {
       noWarnings: true,
       noPlaylist: true,
       noCheckCertificate: true,
+      extractorArgs: 'youtube:player_client=ios',
     };
 
-    if (platform === 'YouTube') {
-      baseOptions.extractorArgs = 'youtube:player_client=android_embedded';
+    if (platform === 'YouTube' && fs.existsSync(COOKIES_FILE)) {
+      baseOptions.cookies = COOKIES_FILE;
     }
 
     if (formatId === 'mp3-best') {
@@ -477,7 +585,7 @@ export const downloadVideo = async (req, res) => {
       res.setHeader('Content-Type', 'video/mp4');
     }
 
-    console.log(`⬇️ Downloading: ${filename}`);
+    console.log(`⬇️ Starting download: ${filename}`);
 
     await ytDlpWrap(url, downloadOptions);
 
@@ -486,7 +594,7 @@ export const downloadVideo = async (req, res) => {
     }
 
     const fileSize = fs.statSync(tempFilePath).size;
-    console.log(`✅ Downloaded: ${(fileSize / 1024 / 1024).toFixed(2)} MB`);
+    console.log(`✅ Downloaded: ${(fileSize / 1024 / 1024).toFixed(2)} MB\n`);
 
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Length', fileSize);
