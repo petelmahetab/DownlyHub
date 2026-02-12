@@ -7,10 +7,23 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const TEMP_DIR = path.join(__dirname, '../temp');
-const COOKIES_FILE = path.join(process.cwd(), 'cookies', 'youtube_cookies.txt');
+let COOKIES_FILE = path.join(process.cwd(), 'cookies', 'youtube_cookies.txt');
 
+// Initialize directories and cookies
 if (!fs.existsSync(TEMP_DIR)) {
   fs.mkdirSync(TEMP_DIR, { recursive: true });
+}
+
+// Load cookies from environment variable if available (for production)
+if (process.env.YOUTUBE_COOKIES_BASE64) {
+  try {
+    const cookiesContent = Buffer.from(process.env.YOUTUBE_COOKIES_BASE64, 'base64').toString('utf8');
+    COOKIES_FILE = path.join(TEMP_DIR, 'youtube_cookies.txt');
+    fs.writeFileSync(COOKIES_FILE, cookiesContent);
+    console.log('✅ Cookies loaded from environment variable');
+  } catch (err) {
+    console.error('⚠️ Failed to load cookies from env:', err.message);
+  }
 }
 
 const detectPlatform = (url) => {
@@ -20,7 +33,7 @@ const detectPlatform = (url) => {
   if (url.includes('tiktok.com')) return 'TikTok';
   if (url.includes('twitter.com') || url.includes('x.com')) return 'Twitter';
   if (url.includes('snapchat.com')) return 'Snapchat';
-  if (url.includes('linkedin.com')) return 'Linkdin';
+  if (url.includes('linkedin.com')) return 'LinkedIn';
   return 'Unknown';
 };
 
@@ -34,7 +47,6 @@ const hasAudioTrack = (format) => {
   return false;
 };
 
-// NUCLEAR OPTION - ALL POSSIBLE STRATEGIES
 const getYtDlpStrategies = (platform) => {
   if (platform !== 'YouTube') {
     return [{
@@ -53,18 +65,6 @@ const getYtDlpStrategies = (platform) => {
   const hasCookieFile = fs.existsSync(COOKIES_FILE);
 
   if (hasCookieFile) {
-    console.log('✅ Found cookie file');
-    try {
-      const cookieContent = fs.readFileSync(COOKIES_FILE, 'utf8');
-      const cookieLines = cookieContent.split('\n').filter(line => !line.startsWith('#') && line.trim());
-      console.log(`📊 Cookie file has ${cookieLines.length} valid entries`);
-    } catch (err) {
-      console.log('⚠️ Could not read cookie file:', err.message);
-    }
-  }
-
-  // Strategy 1: iOS with cookies (if available)
-  if (hasCookieFile) {
     strategies.push({
       name: 'iOS + Cookies',
       options: {
@@ -79,7 +79,6 @@ const getYtDlpStrategies = (platform) => {
     });
   }
 
-  // Strategy 2: iOS without cookies (OFTEN WORKS BEST)
   strategies.push({
     name: 'iOS Pure',
     options: {
@@ -92,7 +91,6 @@ const getYtDlpStrategies = (platform) => {
     }
   });
 
-  // Strategy 3: Android Music
   strategies.push({
     name: 'Android Music',
     options: {
@@ -104,7 +102,6 @@ const getYtDlpStrategies = (platform) => {
     }
   });
 
-  // Strategy 4: Media Connect
   strategies.push({
     name: 'Media Connect',
     options: {
@@ -116,7 +113,6 @@ const getYtDlpStrategies = (platform) => {
     }
   });
 
-  // Strategy 5: TV Embedded
   strategies.push({
     name: 'TV Embedded',
     options: {
@@ -125,43 +121,6 @@ const getYtDlpStrategies = (platform) => {
       noCheckCertificate: true,
       noPlaylist: true,
       extractorArgs: 'youtube:player_client=tv_embedded',
-    }
-  });
-
-  // Strategy 6: Android VR
-  strategies.push({
-    name: 'Android VR',
-    options: {
-      dumpSingleJson: true,
-      noWarnings: true,
-      noCheckCertificate: true,
-      noPlaylist: true,
-      extractorArgs: 'youtube:player_client=android_vr',
-    }
-  });
-
-  // Strategy 7: mWeb (mobile web)
-  strategies.push({
-    name: 'Mobile Web',
-    options: {
-      dumpSingleJson: true,
-      noWarnings: true,
-      noCheckCertificate: true,
-      noPlaylist: true,
-      extractorArgs: 'youtube:player_client=mweb',
-      userAgent: 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-    }
-  });
-
-  // Strategy 8: Web with skip
-  strategies.push({
-    name: 'Web Skip',
-    options: {
-      dumpSingleJson: true,
-      noWarnings: true,
-      noCheckCertificate: true,
-      noPlaylist: true,
-      extractorArgs: 'youtube:player_skip=webpage,configs',
     }
   });
 
@@ -200,11 +159,10 @@ export const testApi = (req, res) => {
   
   res.json({
     success: true,
-    message: 'Multi-Platform Video Downloader API - NUCLEAR MODE',
+    message: 'Multi-Platform Video Downloader API',
     cookieFile: hasCookieFile ? 'Found' : 'Not Found',
-    strategies: 8,
-    mode: 'Maximum Compatibility',
-    supported: 'YouTube, Instagram, Facebook, TikTok, Twitter, Snapchat, and 1000+ more',
+    strategies: 5,
+    supported: 'YouTube, Instagram, Facebook, TikTok, Twitter, Snapchat, LinkedIn, and 1000+ more',
     timestamp: new Date().toISOString(),
   });
 };
@@ -228,44 +186,23 @@ export const getVideoInfo = async (req, res) => {
     }
 
     const platform = detectPlatform(url);
-    console.log(`\n${'='.repeat(60)}`);
-    console.log(`📥 FETCH REQUEST: ${platform}`);
-    console.log(`🔗 URL: ${url.substring(0, 80)}...`);
-    console.log(`${'='.repeat(60)}\n`);
-
     const strategies = getYtDlpStrategies(platform);
     let info = null;
     let successStrategy = null;
     let lastError = null;
-    let attemptCount = 0;
 
     for (const strategy of strategies) {
-      attemptCount++;
       try {
-        console.log(`🔄 [${attemptCount}/${strategies.length}] Trying: ${strategy.name}`);
-        
-        const startTime = Date.now();
         info = await ytDlpWrap(url, strategy.options);
-        const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-        
         successStrategy = strategy.name;
-        console.log(`✅ SUCCESS in ${duration}s with ${strategy.name}`);
-        console.log(`📹 Video: ${info.title?.substring(0, 60)}...`);
-        console.log(`👤 Uploader: ${info.uploader || info.channel || 'Unknown'}`);
-        console.log(`📊 Formats found: ${info.formats?.length || 0}`);
         break;
       } catch (error) {
-        const errorMsg = error.message.substring(0, 120);
-        console.log(`❌ [${attemptCount}/${strategies.length}] ${strategy.name} failed`);
-        console.log(`   Error: ${errorMsg}...`);
         lastError = error;
         continue;
       }
     }
 
     if (!info) {
-      console.log(`\n❌ ALL ${strategies.length} STRATEGIES FAILED`);
-      console.log(`Last error: ${lastError?.message.substring(0, 200)}\n`);
       throw lastError || new Error('All download strategies failed');
     }
 
@@ -429,9 +366,6 @@ export const getVideoInfo = async (req, res) => {
       hasAudio: true
     });
 
-    console.log(`\n✅ COMPLETED: ${allFormats.length} formats prepared`);
-    console.log(`📤 Sending response...\n`);
-
     res.json({
       success: true,
       data: {
@@ -452,20 +386,13 @@ export const getVideoInfo = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('\n❌ FATAL ERROR:', error.message, '\n');
+    console.error('Error:', error.message);
 
-    if (error.message.includes('Sign in to confirm') || 
-        error.message.includes('not a bot')) {
+    if (error.message.includes('Sign in to confirm') || error.message.includes('not a bot')) {
       return res.status(403).json({
         success: false,
         error: 'YouTube Bot Detection',
         message: 'All bypass methods failed. This video may be region-restricted or age-gated.',
-        suggestions: [
-          '1. Try updating yt-dlp: npm update yt-dlp-exec',
-          '2. Try a different YouTube video',
-          '3. Video might be region-locked or age-restricted',
-          '4. Try again in a few minutes (rate limiting)'
-        ]
       });
     }
 
@@ -503,17 +430,14 @@ export const downloadVideo = async (req, res) => {
     }
 
     const platform = detectPlatform(url);
-    console.log(`\n📥 DOWNLOAD REQUEST: ${platform}`);
-    console.log(`Format: ${formatId}`);
-
     const strategies = getYtDlpStrategies(platform);
     let info = null;
+    let successfulStrategy = null;
 
     for (const strategy of strategies) {
       try {
-        console.log(`🔄 Fetching with: ${strategy.name}`);
         info = await ytDlpWrap(url, strategy.options);
-        console.log(`✅ Info fetched`);
+        successfulStrategy = strategy;
         break;
       } catch (error) {
         continue;
@@ -538,10 +462,21 @@ export const downloadVideo = async (req, res) => {
       noWarnings: true,
       noPlaylist: true,
       noCheckCertificate: true,
-      extractorArgs: 'youtube:player_client=ios',
     };
 
-    if (platform === 'YouTube' && fs.existsSync(COOKIES_FILE)) {
+    if (successfulStrategy && successfulStrategy.options) {
+      if (successfulStrategy.options.extractorArgs) {
+        baseOptions.extractorArgs = successfulStrategy.options.extractorArgs;
+      }
+      if (successfulStrategy.options.userAgent) {
+        baseOptions.userAgent = successfulStrategy.options.userAgent;
+      }
+      if (successfulStrategy.options.cookies) {
+        baseOptions.cookies = successfulStrategy.options.cookies;
+      }
+    }
+
+    if (platform === 'YouTube' && fs.existsSync(COOKIES_FILE) && !baseOptions.cookies) {
       baseOptions.cookies = COOKIES_FILE;
     }
 
@@ -585,8 +520,6 @@ export const downloadVideo = async (req, res) => {
       res.setHeader('Content-Type', 'video/mp4');
     }
 
-    console.log(`⬇️ Starting download: ${filename}`);
-
     await ytDlpWrap(url, downloadOptions);
 
     if (!fs.existsSync(tempFilePath)) {
@@ -594,7 +527,6 @@ export const downloadVideo = async (req, res) => {
     }
 
     const fileSize = fs.statSync(tempFilePath).size;
-    console.log(`✅ Downloaded: ${(fileSize / 1024 / 1024).toFixed(2)} MB\n`);
 
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Length', fileSize);
@@ -606,7 +538,6 @@ export const downloadVideo = async (req, res) => {
       setTimeout(() => {
         if (fs.existsSync(tempFilePath)) {
           fs.unlinkSync(tempFilePath);
-          console.log(`🗑️ Cleaned up temp file`);
         }
       }, 5000);
     });
@@ -619,7 +550,7 @@ export const downloadVideo = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Download error:', error.message);
+    console.error('Download error:', error.message);
 
     if (tempFilePath && fs.existsSync(tempFilePath)) {
       fs.unlinkSync(tempFilePath);
